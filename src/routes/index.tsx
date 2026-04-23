@@ -1,26 +1,25 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { FitnessGame } from "@/components/FitnessGame";
 
 export const Route = createFileRoute("/")({
   component: Index,
+  head: () => ({
+    meta: [
+      { title: "PoseFit Arena — Browser Pose Detection Fitness Game" },
+      {
+        name: "description",
+        content:
+          "Squat and jump in front of your webcam. Browser-based pose detection fitness game with streak bonuses and a 30-second challenge mode.",
+      },
+      { property: "og:title", content: "PoseFit Arena" },
+      {
+        property: "og:description",
+        content: "Browser pose detection fitness game with streaks and challenge mode.",
+      },
+    ],
+  }),
 });
 
-// IMPORTANT: Replace this placeholder. For sites with multiple pages (About, Services, Contact, etc.),
-// create separate route files (about.tsx, services.tsx, contact.tsx) — don't put all pages in this file.
-function PlaceholderIndex() {
-  return (
-    <div
-      className="flex min-h-screen items-center justify-center"
-      style={{ backgroundColor: "#fcfbf8" }}
-    >
-      <img
-        data-lovable-blank-page-placeholder="REMOVE_THIS"
-        src="https://cdn.gpteng.co/blank-app-v1.svg"
-        alt="Your app will live here!"
-      />
-    </div>
-  );
-}
-
 function Index() {
-  return <PlaceholderIndex />;
+  return <FitnessGame />;
 }
