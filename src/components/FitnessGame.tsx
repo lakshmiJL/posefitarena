@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
-import { usePoseDetector, type ExerciseType } from "@/hooks/usePoseDetector";
+import { usePoseDetector } from "@/hooks/usePoseDetector";
+import { EXERCISES, type ExerciseId } from "@/lib/exerciseDetectors";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Activity, Flame, Timer, Trophy, Zap, Camera } from "lucide-react";
+import { Activity, Flame, Timer, Trophy, Zap, Camera, Target } from "lucide-react";
 
 type Mode = "free" | "challenge";
 const CHALLENGE_SECONDS = 30;
@@ -31,21 +32,23 @@ export function FitnessGame() {
   const [score, setScore] = useState(0);
   const [streak, setStreak] = useState(0);
   const [bestStreak, setBestStreak] = useState(0);
-  const [message, setMessage] = useState<string>("Stand back so your full body is visible");
+  const [message, setMessage] = useState<string>(
+    "Stand back so your full body is visible",
+  );
   const [msgKey, setMsgKey] = useState(0);
   const [timeLeft, setTimeLeft] = useState(CHALLENGE_SECONDS);
   const [finished, setFinished] = useState(false);
+  const [locked, setLocked] = useState<ExerciseId | null>(null);
 
   const lastRepTime = useRef<number>(0);
 
   const handleRep = useCallback(
-    (type: ExerciseType) => {
+    (type: ExerciseId) => {
       if (!running) return;
       const now = performance.now();
       const delta = now - lastRepTime.current;
       lastRepTime.current = now;
 
-      // Streak: consecutive reps within 4s
       let newStreak = 1;
       if (delta < 4000) {
         setStreak((s) => {
@@ -57,17 +60,22 @@ export function FitnessGame() {
         newStreak = 1;
       }
 
-      const base = type === "jump" ? 12 : 10;
+      const meta = EXERCISES.find((e) => e.id === type);
+      const base = meta?.basePoints ?? 10;
       const bonus = Math.min(newStreak - 1, 9) * 3;
-      const gained = base + bonus;
-      setScore((s) => s + gained);
+      setScore((s) => s + base + bonus);
 
       if (newStreak >= 3) {
         const tmpl =
           MOTIVATION_STREAK[Math.floor(Math.random() * MOTIVATION_STREAK.length)];
         setMessage(tmpl.replace("{n}", String(newStreak)));
       } else {
-        setMessage(MOTIVATION_GOOD[Math.floor(Math.random() * MOTIVATION_GOOD.length)]);
+        const label = meta?.label ?? "Rep";
+        const phrases = [
+          `${label.slice(0, -1)}! 💥`,
+          MOTIVATION_GOOD[Math.floor(Math.random() * MOTIVATION_GOOD.length)],
+        ];
+        setMessage(phrases[Math.floor(Math.random() * phrases.length)]);
       }
       setMsgKey((k) => k + 1);
       setBestStreak((b) => Math.max(b, newStreak));
@@ -79,6 +87,7 @@ export function FitnessGame() {
     videoRef,
     canvasRef,
     enabled: true,
+    lockedExercise: locked,
     onRep: handleRep,
   });
 
@@ -96,7 +105,6 @@ export function FitnessGame() {
     return () => clearTimeout(id);
   }, [running, timeLeft, mode]);
 
-  // Reset streak if idle too long
   useEffect(() => {
     if (!running) return;
     const id = setInterval(() => {
@@ -127,12 +135,24 @@ export function FitnessGame() {
     setMsgKey((k) => k + 1);
   };
 
-  const total = stats.squats + stats.jumps;
+  const total = useMemo(
+    () => Object.values(stats.counts).reduce((a, b) => a + b, 0),
+    [stats.counts],
+  );
   const challengeProgress = useMemo(
     () => ((CHALLENGE_SECONDS - timeLeft) / CHALLENGE_SECONDS) * 100,
     [timeLeft],
   );
   const streakProgress = Math.min(streak * 10, 100);
+
+  const lockedMeta = locked ? EXERCISES.find((e) => e.id === locked) : null;
+
+  // Top performed exercises (sorted by count, show non-zero first then a few zero)
+  const sortedExercises = useMemo(() => {
+    return [...EXERCISES].sort(
+      (a, b) => stats.counts[b.id] - stats.counts[a.id],
+    );
+  }, [stats.counts]);
 
   return (
     <div className="min-h-screen px-4 py-6 md:py-10">
@@ -145,7 +165,7 @@ export function FitnessGame() {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground md:text-base">
-            Squat & jump in front of your camera. Build streaks. Crush the clock.
+            10 exercises auto-detected from your webcam. Build streaks. Crush the clock.
           </p>
         </header>
 
@@ -182,7 +202,6 @@ export function FitnessGame() {
                 </div>
               )}
 
-              {/* Floating message */}
               {ready && (
                 <div
                   key={msgKey}
@@ -192,7 +211,15 @@ export function FitnessGame() {
                 </div>
               )}
 
-              {/* Challenge timer */}
+              {lockedMeta && (
+                <div className="absolute left-4 top-4 flex items-center gap-2 rounded-lg bg-card/80 px-3 py-2 backdrop-blur-md">
+                  <Target className="h-4 w-4 text-primary" />
+                  <span className="font-display text-sm uppercase tracking-wider text-primary">
+                    {lockedMeta.emoji} {lockedMeta.label}
+                  </span>
+                </div>
+              )}
+
               {mode === "challenge" && (running || finished) && (
                 <div className="absolute right-4 top-4 flex items-center gap-2 rounded-lg bg-card/80 px-3 py-2 backdrop-blur-md">
                   <Timer className="h-4 w-4 text-accent" />
@@ -206,6 +233,48 @@ export function FitnessGame() {
                 <Progress value={challengeProgress} className="h-2" />
               </div>
             )}
+
+            {/* Exercise picker */}
+            <div className="border-t border-border p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-xs uppercase tracking-widest text-muted-foreground">
+                  Focus exercise (optional)
+                </p>
+                {locked && (
+                  <button
+                    onClick={() => setLocked(null)}
+                    className="text-xs uppercase tracking-widest text-accent hover:underline"
+                  >
+                    Detect all
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {EXERCISES.map((e) => {
+                  const active = locked === e.id;
+                  return (
+                    <button
+                      key={e.id}
+                      onClick={() => setLocked(active ? null : e.id)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-medium transition-all ${
+                        active
+                          ? "border-primary bg-primary text-primary-foreground shadow-glow"
+                          : "border-border bg-card text-muted-foreground hover:border-primary/60 hover:text-foreground"
+                      }`}
+                      title={e.hint}
+                    >
+                      <span className="mr-1">{e.emoji}</span>
+                      {e.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {lockedMeta && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  💡 {lockedMeta.hint}
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Stats panel */}
@@ -260,9 +329,13 @@ export function FitnessGame() {
                 <span className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
                   <Trophy className="h-4 w-4 text-primary" /> Score
                 </span>
-                <span className="text-xs text-muted-foreground">Best streak {bestStreak}</span>
+                <span className="text-xs text-muted-foreground">
+                  Best streak {bestStreak}
+                </span>
               </div>
-              <div className="mt-1 font-display text-6xl text-gradient-hero">{score}</div>
+              <div className="mt-1 font-display text-6xl text-gradient-hero">
+                {score}
+              </div>
             </div>
 
             {/* Streak */}
@@ -279,22 +352,37 @@ export function FitnessGame() {
               </p>
             </div>
 
-            {/* Reps */}
-            <div className="grid grid-cols-2 gap-3">
-              <RepCard
-                label="Squats"
-                value={stats.squats}
-                accent="primary"
-                pulse={stats.lastAction === "squat" && running}
-                tick={stats.actionTick}
-              />
-              <RepCard
-                label="Jumps"
-                value={stats.jumps}
-                accent="accent"
-                pulse={stats.lastAction === "jump" && running}
-                tick={stats.actionTick}
-              />
+            {/* All exercise reps */}
+            <div className="rounded-2xl border border-border bg-card p-4">
+              <p className="mb-3 text-xs uppercase tracking-widest text-muted-foreground">
+                Reps by exercise
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                {sortedExercises.map((e) => {
+                  const count = stats.counts[e.id];
+                  const pulse = stats.lastAction === e.id && running;
+                  return (
+                    <div
+                      key={e.id + (pulse ? stats.actionTick : "")}
+                      className={`flex items-center justify-between rounded-xl border border-border bg-background/40 px-3 py-2 ${
+                        pulse ? "animate-pop-in border-primary" : ""
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                        <span>{e.emoji}</span>
+                        <span className="truncate">{e.label}</span>
+                      </span>
+                      <span
+                        className={`font-display text-xl ${
+                          count > 0 ? "text-foreground" : "text-muted-foreground/40"
+                        }`}
+                      >
+                        {count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="rounded-2xl border border-border bg-card p-4 text-center">
@@ -307,34 +395,10 @@ export function FitnessGame() {
         </div>
 
         <footer className="mt-8 flex items-center justify-center gap-2 text-xs text-muted-foreground">
-          <Zap className="h-3 w-3" /> 100% browser-based pose detection · TensorFlow.js MoveNet
+          <Zap className="h-3 w-3" /> 100% browser-based pose detection · TensorFlow.js
+          MoveNet
         </footer>
       </div>
-    </div>
-  );
-}
-
-function RepCard({
-  label,
-  value,
-  accent,
-  pulse,
-  tick,
-}: {
-  label: string;
-  value: number;
-  accent: "primary" | "accent";
-  pulse: boolean;
-  tick: number;
-}) {
-  const color = accent === "primary" ? "text-primary" : "text-accent";
-  return (
-    <div
-      key={pulse ? tick : "static"}
-      className={`rounded-2xl border border-border bg-card p-4 ${pulse ? "animate-pop-in" : ""}`}
-    >
-      <p className="text-xs uppercase tracking-widest text-muted-foreground">{label}</p>
-      <p className={`font-display text-4xl ${color}`}>{value}</p>
     </div>
   );
 }

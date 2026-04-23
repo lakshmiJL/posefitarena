@@ -2,47 +2,60 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import * as tf from "@tensorflow/tfjs";
 import "@tensorflow/tfjs-backend-webgl";
 import * as poseDetection from "@tensorflow-models/pose-detection";
+import {
+  EXERCISES,
+  allExerciseIds,
+  getDetector,
+  makeState,
+  type DetectorState,
+  type ExerciseId,
+} from "@/lib/exerciseDetectors";
 
-export type ExerciseType = "squat" | "jump";
+export type { ExerciseId } from "@/lib/exerciseDetectors";
 
 export interface PoseStats {
-  squats: number;
-  jumps: number;
-  lastAction: ExerciseType | null;
-  actionTick: number; // increments on each rep
+  counts: Record<ExerciseId, number>;
+  lastAction: ExerciseId | null;
+  actionTick: number;
 }
 
 interface Options {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   enabled: boolean;
-  onRep?: (type: ExerciseType) => void;
+  /** When set, only this exercise is detected. Otherwise all are. */
+  lockedExercise?: ExerciseId | null;
+  onRep?: (type: ExerciseId) => void;
 }
 
-/**
- * Browser-only pose detection using TensorFlow.js MoveNet.
- * Detects squats (hip-knee distance shrinks) and jumps (hip rises sharply).
- */
-export function usePoseDetector({ videoRef, canvasRef, enabled, onRep }: Options) {
+const initCounts = (): Record<ExerciseId, number> =>
+  Object.fromEntries(EXERCISES.map((e) => [e.id, 0])) as Record<ExerciseId, number>;
+
+export function usePoseDetector({
+  videoRef,
+  canvasRef,
+  enabled,
+  lockedExercise,
+  onRep,
+}: Options) {
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [stats, setStats] = useState<PoseStats>({
-    squats: 0,
-    jumps: 0,
+    counts: initCounts(),
     lastAction: null,
     actionTick: 0,
   });
 
   const detectorRef = useRef<poseDetection.PoseDetector | null>(null);
   const rafRef = useRef<number | null>(null);
-  const stateRef = useRef({
-    squatDown: false,
-    inAir: false,
-    baselineHipY: null as number | null,
-    baselineKneeHipDist: null as number | null,
-    lastJumpTime: 0,
-    lastSquatTime: 0,
-  });
+  const statesRef = useRef<Record<ExerciseId, DetectorState>>(
+    Object.fromEntries(EXERCISES.map((e) => [e.id, makeState()])) as Record<
+      ExerciseId,
+      DetectorState
+    >,
+  );
+  const lockedRef = useRef<ExerciseId | null>(lockedExercise ?? null);
+  lockedRef.current = lockedExercise ?? null;
   const onRepRef = useRef(onRep);
   onRepRef.current = onRep;
 
@@ -104,38 +117,11 @@ export function usePoseDetector({ videoRef, canvasRef, enabled, onRep }: Options
     if (!ready || !enabled) return;
     let stopped = false;
 
-    const loop = async () => {
-      if (stopped) return;
-      const detector = detectorRef.current;
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      if (detector && video && video.readyState >= 2 && canvas) {
-        try {
-          const poses = await detector.estimatePoses(video);
-          drawAndAnalyze(poses, canvas, video);
-        } catch {
-          /* ignore frame errors */
-        }
-      }
-      rafRef.current = requestAnimationFrame(loop);
-    };
-
-    const drawAndAnalyze = (
-      poses: poseDetection.Pose[],
-      canvas: HTMLCanvasElement,
-      video: HTMLVideoElement,
+    const drawSkeleton = (
+      kp: poseDetection.Keypoint[],
+      ctx: CanvasRenderingContext2D,
     ) => {
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      if (poses.length === 0) return;
-      const kp = poses[0].keypoints;
-      const get = (name: string) => kp.find((k) => k.name === name);
-
-      // Draw skeleton
+      const get = (n: string) => kp.find((k) => k.name === n);
       ctx.fillStyle = "oklch(0.82 0.22 140)";
       ctx.strokeStyle = "oklch(0.82 0.22 140 / 0.7)";
       ctx.lineWidth = 3;
@@ -170,74 +156,52 @@ export function usePoseDetector({ videoRef, canvasRef, enabled, onRep }: Options
           ctx.stroke();
         }
       }
+    };
 
-      // Analyze: use mid-hip and mid-knee
-      const lh = get("left_hip");
-      const rh = get("right_hip");
-      const lk = get("left_knee");
-      const rk = get("right_knee");
-      if (
-        !lh ||
-        !rh ||
-        !lk ||
-        !rk ||
-        (lh.score ?? 0) < 0.4 ||
-        (rh.score ?? 0) < 0.4 ||
-        (lk.score ?? 0) < 0.4 ||
-        (rk.score ?? 0) < 0.4
-      )
-        return;
-
-      const hipY = (lh.y + rh.y) / 2;
-      const kneeY = (lk.y + rk.y) / 2;
-      const dist = Math.abs(kneeY - hipY);
-      const s = stateRef.current;
+    const analyze = (kp: poseDetection.Keypoint[]) => {
+      const get = (n: string) => kp.find((k) => k.name === n);
       const now = performance.now();
-
-      // Calibrate baseline (running average when standing)
-      if (s.baselineHipY === null) s.baselineHipY = hipY;
-      if (s.baselineKneeHipDist === null) s.baselineKneeHipDist = dist;
-      // Slow drift toward standing baseline
-      if (!s.squatDown && !s.inAir) {
-        s.baselineHipY = s.baselineHipY * 0.95 + hipY * 0.05;
-        s.baselineKneeHipDist = s.baselineKneeHipDist * 0.95 + dist * 0.05;
+      const ids: ExerciseId[] = lockedRef.current
+        ? [lockedRef.current]
+        : allExerciseIds();
+      for (const id of ids) {
+        const detector = getDetector(id);
+        const state = statesRef.current[id];
+        const fired = detector({ get, now, state });
+        if (fired) {
+          setStats((prev) => ({
+            counts: { ...prev.counts, [id]: prev.counts[id] + 1 },
+            lastAction: id,
+            actionTick: prev.actionTick + 1,
+          }));
+          onRepRef.current?.(id);
+        }
       }
+    };
 
-      // JUMP: hip rises significantly above baseline
-      const jumpThreshold = 40; // px upward (y decreases)
-      if (
-        !s.inAir &&
-        s.baselineHipY - hipY > jumpThreshold &&
-        now - s.lastJumpTime > 400
-      ) {
-        s.inAir = true;
-      } else if (s.inAir && s.baselineHipY - hipY < 10) {
-        s.inAir = false;
-        s.lastJumpTime = now;
-        setStats((p) => ({
-          ...p,
-          jumps: p.jumps + 1,
-          lastAction: "jump",
-          actionTick: p.actionTick + 1,
-        }));
-        onRepRef.current?.("jump");
+    const loop = async () => {
+      if (stopped) return;
+      const detector = detectorRef.current;
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (detector && video && video.readyState >= 2 && canvas) {
+        try {
+          const poses = await detector.estimatePoses(video);
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            if (poses.length > 0) {
+              drawSkeleton(poses[0].keypoints, ctx);
+              analyze(poses[0].keypoints);
+            }
+          }
+        } catch {
+          /* ignore frame errors */
+        }
       }
-
-      // SQUAT: knee-hip vertical distance shrinks (legs bent)
-      const squatRatio = dist / (s.baselineKneeHipDist || 1);
-      if (!s.squatDown && !s.inAir && squatRatio < 0.65 && now - s.lastSquatTime > 400) {
-        s.squatDown = true;
-      } else if (s.squatDown && squatRatio > 0.85) {
-        s.squatDown = false;
-        s.lastSquatTime = now;
-        setStats((p) => ({
-          ...p,
-          squats: p.squats + 1,
-          lastAction: "squat",
-          actionTick: p.actionTick + 1,
-        }));
-        onRepRef.current?.("squat");
-      }
+      rafRef.current = requestAnimationFrame(loop);
     };
 
     rafRef.current = requestAnimationFrame(loop);
@@ -248,11 +212,10 @@ export function usePoseDetector({ videoRef, canvasRef, enabled, onRep }: Options
   }, [ready, enabled, videoRef, canvasRef]);
 
   const reset = useCallback(() => {
-    setStats({ squats: 0, jumps: 0, lastAction: null, actionTick: 0 });
-    stateRef.current.baselineHipY = null;
-    stateRef.current.baselineKneeHipDist = null;
-    stateRef.current.squatDown = false;
-    stateRef.current.inAir = false;
+    setStats({ counts: initCounts(), lastAction: null, actionTick: 0 });
+    statesRef.current = Object.fromEntries(
+      EXERCISES.map((e) => [e.id, makeState()]),
+    ) as Record<ExerciseId, DetectorState>;
   }, []);
 
   return { ready, error, stats, reset };
