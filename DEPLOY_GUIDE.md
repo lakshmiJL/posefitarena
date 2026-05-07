@@ -1,44 +1,47 @@
 # 🚀 Deployment Guide: PoseFit Arena
 
-This project is set up with **GitHub Actions** for automated builds and is optimized for **Cloudflare Pages**.
+This project is optimized for **Cloudflare Pages** with automated builds via GitHub.
 
 ## 1. Push to GitHub
-If you haven't already, create a new repository on GitHub and push your code:
+If you haven't already, link your local project to your GitHub repository:
 
 ```bash
 git remote add origin https://github.com/YOUR_USERNAME/posefitarena.git
-git branch -M main
-git push -u origin main
+git branch -M master
+git push -u origin master --force
 ```
 
-## 2. GitHub Actions
+## 2. GitHub Actions (Optional CI)
 I have added a build workflow in `.github/workflows/build.yml`. 
 - **What it does**: On every push, it installs dependencies using **npm** and runs `npm run build` to ensure your code is error-free.
 - **Where are the files?**: The build output is saved as a GitHub Action artifact.
 
 ## 3. Deploying to Cloudflare Pages (Recommended)
-This project is configured via `wrangler.jsonc` for Cloudflare.
+This is the easiest way to host your app.
 
-### Option A: Automatic Deployment (via Cloudflare Dashboard)
-1. Go to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
-2. Navigate to **Workers & Pages** > **Create application** > **Pages** > **Connect to Git**.
-3. Select your GitHub repository.
-4. Use these build settings:
-   - **Framework preset**: `None` (or `TanStack Start` if available)
-   - **Build command**: `npm run build`
-   - **Build output directory**: `.output`
-   - **Environment variables**: Set `NODE_VERSION` to `20` or higher.
+### 🛠️ Step-by-Step Setup
+1.  Go to the [Cloudflare Dashboard](https://dash.cloudflare.com/).
+2.  Navigate to **Workers & Pages** > **Create application** > **Pages** > **Connect to Git**.
+3.  Select your GitHub repository.
+4.  **Crucial Build Settings**:
+    *   **Framework preset**: `None`
+    *   **Build command**: `npm install && npm run build`
+    *   **Build output directory**: `.output`
+5.  **Environment Variables**:
+    *   Go to the "Environment variables" section.
+    *   Add `NODE_VERSION` and set it to `20` or higher.
+6.  **Compatibility Flags (Required for TanStack Start)**:
+    *   After your first deployment, go to **Settings** > **Functions** > **Compatibility Flags**.
+    *   Add `nodejs_compat` to both **Production** and **Preview**.
+    *   Save and redeploy.
 
-### Option B: GitHub Actions Deployment
-If you want GitHub to handle the deployment directly:
-1. In your GitHub Repo, go to **Settings** > **Secrets and variables** > **Actions**.
-2. Add the following secrets:
-   - `CLOUDFLARE_API_TOKEN`: Your Cloudflare API token (with Pages edit permissions).
-   - `CLOUDFLARE_ACCOUNT_ID`: Your Cloudflare Account ID.
-3. Uncomment the `deploy` job in `.github/workflows/build.yml`.
+### 💡 Troubleshooting Lockfile Errors
+If you see errors like `npm ci failed` or `lockfile out of sync`:
+- Go to the **Deploys** tab in Cloudflare.
+- Click **Retry deployment** and select **"Clear cache and deploy"**.
 
 ## 4. Local Preview
-To test the production build locally:
+To test the production build locally on your machine:
 ```bash
 npm run build
 npm run preview
