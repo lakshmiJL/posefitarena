@@ -13,7 +13,7 @@ git push -u origin main
 
 ## 2. GitHub Actions
 I have added a build workflow in `.github/workflows/build.yml`. 
-- **What it does**: On every push, it installs dependencies using **Bun** and runs `npm run build` to ensure your code is error-free.
+- **What it does**: On every push, it installs dependencies using **npm** and runs `npm run build` to ensure your code is error-free.
 - **Where are the files?**: The build output is saved as a GitHub Action artifact.
 
 ## 3. Deploying to Cloudflare Pages (Recommended)
