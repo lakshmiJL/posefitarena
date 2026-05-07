@@ -1,0 +1,44 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: ["master", "main"]
+  pull_request:
+    branches: ["master", "main"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output
+          path: .output # TanStack Start usually builds to .output or dist
+
+  # Optional: Deploy to Cloudflare Pages (if secrets are provided)
+  # deploy:
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   if: github.event_name == 'push'
+  #   steps:
+  #     - name: Deploy to Cloudflare Pages
+  #       uses: cloudflare/wrangler-action@v3
+  #       with:
+  #         apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  #         accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  #         command: pages deploy .output --project-name=posefitarena
