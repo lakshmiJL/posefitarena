@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { usePoseDetector } from "@/hooks/usePoseDetector";
 import { EXERCISES, type ExerciseId } from "@/lib/exerciseDetectors";
+import { ROUTINES, getRoutine } from "@/lib/routines";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Activity, Flame, Timer, Trophy, Zap, Camera, Target } from "lucide-react";
+import { Activity, Flame, Timer, Trophy, Zap, Camera, Target, Dumbbell, ChevronRight, CheckCircle2 } from "lucide-react";
 
-type Mode = "free" | "challenge";
+type Mode = "free" | "challenge" | "routine";
 const CHALLENGE_SECONDS = 30;
 
 const MOTIVATION_GOOD = [
@@ -39,12 +40,27 @@ export function FitnessGame() {
   const [timeLeft, setTimeLeft] = useState(CHALLENGE_SECONDS);
   const [finished, setFinished] = useState(false);
   const [locked, setLocked] = useState<ExerciseId | null>(null);
+  const [routineId, setRoutineId] = useState<string | null>(null);
+  const [routineStepIdx, setRoutineStepIdx] = useState(0);
+  const [routineStepReps, setRoutineStepReps] = useState(0);
 
   const lastRepTime = useRef<number>(0);
+
+  const activeRoutine = routineId ? getRoutine(routineId) : null;
+  const currentStep =
+    activeRoutine && routineStepIdx < activeRoutine.steps.length
+      ? activeRoutine.steps[routineStepIdx]
+      : null;
+
+  // When in routine mode, auto-lock detection to the current step's exercise
+  const effectiveLocked: ExerciseId | null =
+    mode === "routine" && currentStep ? currentStep.exercise : locked;
 
   const handleRep = useCallback(
     (type: ExerciseId) => {
       if (!running) return;
+      // In routine mode only count reps for the current step's exercise
+      if (mode === "routine" && currentStep && type !== currentStep.exercise) return;
       const now = performance.now();
       const delta = now - lastRepTime.current;
       lastRepTime.current = now;
@@ -79,15 +95,40 @@ export function FitnessGame() {
       }
       setMsgKey((k) => k + 1);
       setBestStreak((b) => Math.max(b, newStreak));
+
+      if (mode === "routine" && currentStep && activeRoutine) {
+        setRoutineStepReps((r) => {
+          const next = r + 1;
+          if (next >= currentStep.reps) {
+            // advance step
+            const nextIdx = routineStepIdx + 1;
+            if (nextIdx >= activeRoutine.steps.length) {
+              setRunning(false);
+              setFinished(true);
+              setMessage("Routine complete! 🏆");
+              setMsgKey((k) => k + 1);
+            } else {
+              setRoutineStepIdx(nextIdx);
+              const nextEx = EXERCISES.find(
+                (e) => e.id === activeRoutine.steps[nextIdx].exercise,
+              );
+              setMessage(`Next: ${nextEx?.emoji ?? ""} ${nextEx?.label ?? ""}`);
+              setMsgKey((k) => k + 1);
+            }
+            return 0;
+          }
+          return next;
+        });
+      }
     },
-    [running],
+    [running, mode, currentStep, activeRoutine, routineStepIdx],
   );
 
   const { ready, error, stats, reset } = usePoseDetector({
     videoRef,
     canvasRef,
     enabled: true,
-    lockedExercise: locked,
+    lockedExercise: effectiveLocked,
     onRep: handleRep,
   });
 
@@ -122,10 +163,23 @@ export function FitnessGame() {
     setBestStreak(0);
     setFinished(false);
     setTimeLeft(CHALLENGE_SECONDS);
+    setRoutineStepIdx(0);
+    setRoutineStepReps(0);
     reset();
     lastRepTime.current = 0;
+    if (m === "routine" && !routineId) {
+      setMessage("Pick a routine first");
+      setMsgKey((k) => k + 1);
+      return;
+    }
     setRunning(true);
-    setMessage(m === "challenge" ? "GO! 30 seconds!" : "Free play — go wild!");
+    setMessage(
+      m === "challenge"
+        ? "GO! 30 seconds!"
+        : m === "routine"
+          ? `${activeRoutine?.name ?? "Routine"} — let's go!`
+          : "Free play — go wild!",
+    );
     setMsgKey((k) => k + 1);
   };
 
@@ -146,6 +200,15 @@ export function FitnessGame() {
   const streakProgress = Math.min(streak * 10, 100);
 
   const lockedMeta = locked ? EXERCISES.find((e) => e.id === locked) : null;
+  const currentStepMeta = currentStep
+    ? EXERCISES.find((e) => e.id === currentStep.exercise)
+    : null;
+  const routineProgress = activeRoutine
+    ? ((routineStepIdx + (currentStep ? routineStepReps / currentStep.reps : 0)) /
+        activeRoutine.steps.length) *
+      100
+    : 0;
+  const stepProgress = currentStep ? (routineStepReps / currentStep.reps) * 100 : 0;
 
   // Top performed exercises (sorted by count, show non-zero first then a few zero)
   const sortedExercises = useMemo(() => {
@@ -220,6 +283,15 @@ export function FitnessGame() {
                 </div>
               )}
 
+              {mode === "routine" && currentStepMeta && (running || finished) && (
+                <div className="absolute left-4 top-4 flex items-center gap-2 rounded-lg bg-card/80 px-3 py-2 backdrop-blur-md">
+                  <Dumbbell className="h-4 w-4 text-primary" />
+                  <span className="font-display text-sm uppercase tracking-wider text-primary">
+                    {currentStepMeta.emoji} {currentStepMeta.label} · {routineStepReps}/{currentStep!.reps}
+                  </span>
+                </div>
+              )}
+
               {mode === "challenge" && (running || finished) && (
                 <div className="absolute right-4 top-4 flex items-center gap-2 rounded-lg bg-card/80 px-3 py-2 backdrop-blur-md">
                   <Timer className="h-4 w-4 text-accent" />
@@ -231,6 +303,20 @@ export function FitnessGame() {
             {mode === "challenge" && (
               <div className="px-4 py-3">
                 <Progress value={challengeProgress} className="h-2" />
+              </div>
+            )}
+
+            {mode === "routine" && activeRoutine && (
+              <div className="space-y-2 px-4 py-3">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="uppercase tracking-widest text-muted-foreground">
+                    Step {Math.min(routineStepIdx + 1, activeRoutine.steps.length)} / {activeRoutine.steps.length}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {Math.round(routineProgress)}%
+                  </span>
+                </div>
+                <Progress value={stepProgress} className="h-2" />
               </div>
             )}
 
@@ -284,7 +370,7 @@ export function FitnessGame() {
               <p className="mb-3 text-xs uppercase tracking-widest text-muted-foreground">
                 Game Mode
               </p>
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-3 gap-2">
                 <Button
                   variant={mode === "free" ? "default" : "secondary"}
                   onClick={() => setMode("free")}
@@ -299,14 +385,22 @@ export function FitnessGame() {
                   disabled={running}
                   className="font-display tracking-wider"
                 >
-                  30s Challenge
+                  30s
+                </Button>
+                <Button
+                  variant={mode === "routine" ? "default" : "secondary"}
+                  onClick={() => setMode("routine")}
+                  disabled={running}
+                  className="font-display tracking-wider"
+                >
+                  Routine
                 </Button>
               </div>
               <div className="mt-3 flex gap-2">
                 {!running ? (
                   <Button
                     onClick={() => start(mode)}
-                    disabled={!ready}
+                    disabled={!ready || (mode === "routine" && !routineId)}
                     className="flex-1 bg-gradient-hero font-display text-lg uppercase tracking-widest text-primary-foreground hover:opacity-90"
                   >
                     {finished ? "Play Again" : "Start"}
@@ -322,6 +416,103 @@ export function FitnessGame() {
                 )}
               </div>
             </div>
+
+            {/* Routine picker */}
+            {mode === "routine" && (
+              <div className="rounded-2xl border border-border bg-card p-4">
+                <div className="mb-3 flex items-center justify-between">
+                  <p className="flex items-center gap-2 text-xs uppercase tracking-widest text-muted-foreground">
+                    <Dumbbell className="h-4 w-4 text-primary" /> Pick Your Workout
+                  </p>
+                  {routineId && !running && (
+                    <button
+                      onClick={() => setRoutineId(null)}
+                      className="text-xs uppercase tracking-widest text-accent hover:underline"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  {ROUTINES.map((r) => {
+                    const active = routineId === r.id;
+                    const totalReps = r.steps.reduce((a, s) => a + s.reps, 0);
+                    return (
+                      <button
+                        key={r.id}
+                        onClick={() => {
+                          if (running) return;
+                          setRoutineId(r.id);
+                          setRoutineStepIdx(0);
+                          setRoutineStepReps(0);
+                        }}
+                        disabled={running}
+                        className={`group flex items-center justify-between rounded-xl border px-3 py-2.5 text-left transition-all ${
+                          active
+                            ? "border-primary bg-primary/10 shadow-glow"
+                            : "border-border bg-background/40 hover:border-primary/60"
+                        } ${running ? "opacity-60" : ""}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span className="text-2xl">{r.emoji}</span>
+                          <div>
+                            <div className="font-display text-sm uppercase tracking-wider text-foreground">
+                              {r.name}
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {r.tagline}
+                            </div>
+                            <div className="mt-0.5 text-[10px] uppercase tracking-widest text-muted-foreground/70">
+                              {r.steps.length} sets · {totalReps} reps
+                            </div>
+                          </div>
+                        </div>
+                        {active ? (
+                          <CheckCircle2 className="h-5 w-5 text-primary" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {activeRoutine && (
+                  <div className="mt-3 rounded-xl border border-border bg-background/40 p-3">
+                    <p className="mb-2 text-xs uppercase tracking-widest text-muted-foreground">
+                      Sequence
+                    </p>
+                    <div className="space-y-1">
+                      {activeRoutine.steps.map((s, i) => {
+                        const meta = EXERCISES.find((e) => e.id === s.exercise);
+                        const done = i < routineStepIdx || finished;
+                        const current = i === routineStepIdx && running;
+                        return (
+                          <div
+                            key={i}
+                            className={`flex items-center justify-between rounded-md px-2 py-1 text-xs ${
+                              current
+                                ? "bg-primary/15 text-primary"
+                                : done
+                                  ? "text-muted-foreground/60 line-through"
+                                  : "text-muted-foreground"
+                            }`}
+                          >
+                            <span className="flex items-center gap-2">
+                              <span>{meta?.emoji}</span>
+                              <span>{meta?.label}</span>
+                            </span>
+                            <span className="font-display">
+                              {current ? `${routineStepReps}/${s.reps}` : `× ${s.reps}`}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Score */}
             <div className="rounded-2xl border border-border bg-card p-5">
